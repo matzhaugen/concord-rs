@@ -1,4 +1,5 @@
-use ndarray::{Array, Array1, ArrayD, ArrayViewD, ArrayView2, Array2, ArrayViewMutD, ArrayViewMut2};
+use ndarray::Zip;
+use ndarray::{Array, Array1, ArrayD, ArrayViewD, ArrayView1, ArrayView2, Array2, ArrayViewMutD, ArrayViewMut2};
 use numpy::{IntoPyArray, PyArrayDyn, PyArray2, PyReadonlyArrayDyn, PyReadonlyArray2};
 use pyo3::prelude::{pymodule, PyModule, PyResult, Python};
 
@@ -30,7 +31,7 @@ fn pyconcord(_py: Python<'_>, m: &PyModule) -> PyResult<()> {
 	}
 
 	fn sign(a: f64) -> f64 {
-		if ( a > 0.0 ) {
+		if a > 0.0 {
 			return 1.0
 		} else {
 			return - 1.0
@@ -54,57 +55,142 @@ fn pyconcord(_py: Python<'_>, m: &PyModule) -> PyResult<()> {
 		}
 	}
 
-	fn sthreshmat<'a>(mut omega: &'a Array2<f64>, t: ArrayView2<'_, f64>, tau: f64) {
-		let sign_omega = omega.mapv(sign);
-		let mut abs_omega = omega.mapv(abs).to_owned();
-		abs_omega = abs_omega - tau * &t;
-		abs_omega.mapv_inplace(max_zero);
-		omega = &(&sign_omega * &abs_omega.view());
+	fn sthreshmat<'a>(sign_omega: ArrayView2<f64>, 
+        mut omega: ArrayViewMut2<f64>, 
+        lambda_matrix: ArrayView2<f64>) {
+		omega.mapv_inplace(abs);
+		omega -= &lambda_matrix;
+		omega.mapv_inplace(max_zero);
+		omega *= &sign_omega;
 	}
 
     fn concord(data: ArrayView2<'_, f64>, n: &usize, _p: &usize, _lambda: f64) -> Array2<f64> {
         
-        let maxitr = 100;
+        let maxitr = 3;
         // Initial guess - identity matrix
-        let omega_k = Array2::<f64>::eye(* _p);
+        let mut omega_k = Array2::<f64>::eye(* _p);
+        let mut omega = Array2::<f64>::eye(* _p);
 
         let s = data.t().dot(&data) / (*n as f64);
 
-        let ttm = trace_triple_mult(omega_k.view(), s.view(), omega_k.view(), _p);
-        println!("ttm: {:?}", ttm);
+        let mut h = trace_triple_mult(omega_k.view(), s.view(), omega_k.view(), _p);
+        println!("h: {:?}", h);
 
-        let g_k = s.clone() - omega_k.view(); // simplified since x is the identity
-        let mut lambda_matrix = Array2::<f64>::eye(* _p) * _lambda;
-        let mut diagonal = lambda_matrix.diag_mut();
-        diagonal = Array1::<f64>::zeros(*_p).view_mut();
+        let mut g = s.clone() - omega_k.view(); // simplified since x is the identity
+        let mut g_k = g.clone();
+        let mut w_k = g.clone();
+        let mut subg = g.clone();
+        let mut g_k_temp = g.clone();
+        let mut diag_temp = Array1::<f64>::ones(* _p).view_mut();
+        let mut step = omega_k.clone();
+        let mut temp = omega_k.clone();
+        let mut lambda_matrix = Array2::<f64>::ones([* _p, * _p]) * _lambda;
+        let diagonal = Array2::<f64>::eye(* _p) * _lambda;
+        lambda_matrix -= &diagonal;
+        let mut lambda_matrix_i = lambda_matrix.clone();
+        println!("lambda matrix: {:?}", lambda_matrix_i);
         let mut not_converged = true;
         let mut tau: f64;
         let mut taun = 1.0;
         let mut diagitr: i16 = 0;
         let mut backitr: i16 = 0;
         let mut itr: i16 = 0;
+        let mut min_elem: f64;
+        let mut step_norm: f64;
+        let mut q_k: f64;
+        let mut h_k: f64 = 0.0;
+        let mut log_det: f64;
+        let mut trace_product_1: f64;
+        let mut trace_product_2: f64;
+        let mut subgnorm: f64;
+        let mut omega_k_norm: f64;
+        let epstol: f64 = 1e-5;
         let half = 0.5;
-
+        println!("G: {:?}", g);
         while not_converged {
+            println!("itr: {:?}", itr);
+            backitr = 0;
+            tau = taun.clone();
+            lambda_matrix_i = lambda_matrix.clone();
+            while backitr < 2 {
+                
+                if diagitr != 0 || backitr != 0 {
+                    tau *= half;
+                    lambda_matrix_i *= tau;
+                }
 
-        	tau = taun.clone();
+                temp = &g * tau;
+                temp = &omega - &temp;
+                omega_k = temp;
+                println!("tmp before: {:?} {:?}", &omega_k[[0,0]], &omega_k[[0,1]]);
+                sthreshmat(omega.mapv(sign).view(), omega_k.view_mut(), lambda_matrix_i.view());
+                println!("tmp after: {:?} {:?}", &omega_k[[0,0]], &omega_k[[0,1]]);
+                
+                min_elem = omega_k.diag().fold(0.0, |acc, elem| acc.min(*elem));
+                if min_elem < 1e-8 && diagitr < 20 {
+                    println!("Found zero or negative diagonal entries, trying again...");
+                    diagitr += 1;
+                    continue;
+                }
 
-        	if diagitr != 0 || backitr != 0 {
-        		tau = tau * half;
-        	}
+                step = &omega_k - &omega;
+                
+                step_norm = step.fold(0.0, |acc, a| acc + a * a) * 0.5 / tau;
+                trace_product_1 = ndarray::Zip::from(&step).and(&g).fold(0.0, |acc, a, b| acc + a * b);
+                q_k = h + step_norm + trace_product_1;
+                
+                log_det = - omega_k.diag().fold(0.0, |acc, b| acc + b.log(std::f64::consts::E));
+                w_k = omega_k.dot(&s);
+                trace_product_2 = ndarray::Zip::from(&w_k).and(&omega_k).fold(0.0, |acc, a, b| acc + a * b);
+                h_k = log_det + trace_product_2;
+                
+                println!("h: {:?}, q: {:?}", h_k, q_k);
+                if h_k > q_k {
+                    backitr += 1;
+                } else {
+                    println!("Backtrace finished with tau {} after {} iterations ", tau, backitr);
+                    break;
 
-        	let mut tmp = omega_k.to_owned();
-        	tmp = tmp - tau * &g_k;
+                }
+                
+            }
+
+            
+            g_k = 0.5 * &(&w_k + &w_k.t());
+            diag_temp = g_k.diag_mut();
+            diag_temp -= &omega_k.diag().mapv(|a| 1.0 / a);
+
+            taun = 1.0; // TOGO: can be more fancy here
+
+            temp = omega_k.mapv(sign);
+            temp *= &lambda_matrix; // First term
+            temp += &g_k; 
+
+            subg = g_k.clone();
+            sthreshmat(subg.mapv(sign).view(), subg.view_mut(), lambda_matrix.view());
+            ndarray::Zip::from(&mut subg).and(& temp).and(& omega_k).apply(|a, b, c| {
+                if *c != 0.0 { b } else { a };
+            });
+
+            subgnorm = subg.fold(0.0, |acc, a| acc + a * a);
+            omega_k_norm = omega_k.fold(0.0, |acc, a| acc + a * a);
+
+
+            not_converged = subgnorm / omega_k_norm > epstol;
+            println!("Covergence Ratio: {:?}", subgnorm / omega_k_norm);
+            
+            omega = omega_k.clone();
+            h = h_k.clone();
+            g = g_k.clone();
 
         	itr = itr + 1;
         	if itr >= maxitr {
         		not_converged = false;
         	}
-        	not_converged = false;
         };
 
 
-        s
+        omega
     }
 
     #[pyfn(m, "concord")]
