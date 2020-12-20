@@ -1,5 +1,5 @@
 import numpy as np
-from pyconcord import axpy, mult, concord
+from pyconcord import concord
 
 x = np.array([[-1.5855721 ,  1.14879079, -0.1819169 , -0.19171889,  0.32595875,
          0.26037665, -1.24425307, -1.33985745, -0.62722648],
@@ -28,26 +28,21 @@ x = np.array([[-1.5855721 ,  1.14879079, -0.1819169 , -0.19171889,  0.32595875,
        [-0.09213551,  0.30289185, -0.27520564, -0.3229213 , -0.50566111,
         -1.36793332,  0.81627745,  1.46412338,  0.59862447]])
 
-
-
+expected = np.array([[ 0.92,  0.  ,  0.  ,  0.13,  0.  ,  0.  ,  0.  , -0.42,  0.  ],
+       [ 0.  ,  1.13,  0.  ,  0.  ,  0.  ,  0.  ,  0.  ,  0.  ,  0.  ],
+       [ 0.  ,  0.  ,  1.16, -0.63,  0.  , -0.1 ,  0.  ,  0.  ,  0.01],
+       [ 0.13,  0.  , -0.63,  1.34,  0.  ,  0.  ,  0.  ,  0.  ,  0.  ],
+       [ 0.  ,  0.  ,  0.  ,  0.  ,  1.06,  0.  ,  0.  ,  0.  ,  0.28],
+       [ 0.  ,  0.  , -0.1 ,  0.  ,  0.  ,  0.76,  0.  ,  0.  ,  0.  ],
+       [ 0.  ,  0.  ,  0.  ,  0.  ,  0.  ,  0.  ,  1.01, -0.16,  0.  ],
+       [-0.42,  0.  ,  0.  ,  0.  ,  0.  ,  0.  , -0.16,  1.35,  0.  ],
+       [ 0.  ,  0.  ,  0.01,  0.  ,  0.28,  0.  ,  0.  ,  0.  ,  1.07]])
+x = np.random.randn(1000, 200)
 def test_concord():
-	omega = concord(x, 0.3)
-	cov = np.round(omega, 2)
-	assert cov[0, 1] == cov[1, 0]
 
+    omega = concord(x, 0.3)
+    cov = np.round(omega, 2)
+    np.testing.assert_array_almost_equal(cov, expected)
 
-def test_axpy():
-    x = np.array([1.0, 2.0, 3.0])
-    y = np.array([3.0, 3.0, 3.0])
-    z = axpy(3.0, x, y)
-    np.testing.assert_array_almost_equal(z, np.array([6.0, 9.0, 12.0]))
-    x = np.array([1.0, 2.0, 3.0, 4.0])
-    y = np.array([3.0, 3.0, 3.0, 3.0])
-    z = axpy(3.0, x, y)
-    np.testing.assert_array_almost_equal(z, np.array([6.0, 9.0, 12.0, 15.0]))
-
-
-def test_mult():
-    x = np.array([1.0, 2.0, 3.0])
-    mult(3.0, x)
-    np.testing.assert_array_almost_equal(x, np.array([3.0, 6.0, 9.0]))
+if __name__ == '__main__':
+    omega = concord(x, 0.3)
